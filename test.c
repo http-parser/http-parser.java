@@ -32,7 +32,7 @@
 #define FALSE 0
 
 #define MAX_HEADERS 13
-#define MAX_ELEMENT_SIZE 500
+#define MAX_ELEMENT_SIZE 2048
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 
@@ -50,6 +50,8 @@ struct message {
   char query_string[MAX_ELEMENT_SIZE];
   char body[MAX_ELEMENT_SIZE];
   size_t body_size;
+  const char *host;
+  const char *userinfo;
   uint16_t port;
   int num_headers;
   enum { NONE=0, FIELD, VALUE } last_header_element;
@@ -65,6 +67,7 @@ struct message {
   int headers_complete_cb_called;
   int message_complete_cb_called;
   int message_complete_on_eof;
+  int body_is_final;
 };
 
 static int currently_parsing_eof;
@@ -587,7 +590,7 @@ const struct message requests[] =
   ,.body= ""
   }
 
-#define LINE_FOLDING_IN_HEADER 20
+#define LINE_FOLDING_IN_HEADER 21
 , {.name= "line folding in header value"
   ,.type= HTTP_REQUEST
   ,.raw= "GET / HTTP/1.1\r\n"
@@ -616,7 +619,7 @@ const struct message requests[] =
   }
 
 
-#define QUERY_TERMINATED_HOST 21
+#define QUERY_TERMINATED_HOST 22
 , {.name= "host terminated by a query string"
   ,.type= HTTP_REQUEST
   ,.raw= "GET http://hypnotoad.org?hail=all HTTP/1.1\r\n"
@@ -630,12 +633,13 @@ const struct message requests[] =
   ,.fragment= ""
   ,.request_path= ""
   ,.request_url= "http://hypnotoad.org?hail=all"
+  ,.host= "hypnotoad.org"
   ,.num_headers= 0
   ,.headers= { }
   ,.body= ""
   }
 
-#define QUERY_TERMINATED_HOSTPORT 22
+#define QUERY_TERMINATED_HOSTPORT 23
 , {.name= "host:port terminated by a query string"
   ,.type= HTTP_REQUEST
   ,.raw= "GET http://hypnotoad.org:1234?hail=all HTTP/1.1\r\n"
@@ -649,13 +653,14 @@ const struct message requests[] =
   ,.fragment= ""
   ,.request_path= ""
   ,.request_url= "http://hypnotoad.org:1234?hail=all"
+  ,.host= "hypnotoad.org"
   ,.port= 1234
   ,.num_headers= 0
   ,.headers= { }
   ,.body= ""
   }
 
-#define SPACE_TERMINATED_HOSTPORT 23
+#define SPACE_TERMINATED_HOSTPORT 24
 , {.name= "host:port terminated by a space"
   ,.type= HTTP_REQUEST
   ,.raw= "GET http://hypnotoad.org:1234 HTTP/1.1\r\n"
@@ -669,13 +674,14 @@ const struct message requests[] =
   ,.fragment= ""
   ,.request_path= ""
   ,.request_url= "http://hypnotoad.org:1234"
+  ,.host= "hypnotoad.org"
   ,.port= 1234
   ,.num_headers= 0
   ,.headers= { }
   ,.body= ""
   }
 
-#define PATCH_REQ 24
+#define PATCH_REQ 25
 , {.name = "PATCH request"
   ,.type= HTTP_REQUEST
   ,.raw= "PATCH /file.txt HTTP/1.1\r\n"
@@ -703,7 +709,7 @@ const struct message requests[] =
   ,.body= "cccccccccc"
   }
 
-#define CONNECT_CAPS_REQUEST 25
+#define CONNECT_CAPS_REQUEST 26
 , {.name = "connect caps request"
   ,.type= HTTP_REQUEST
   ,.raw= "CONNECT HOME0.NETSCAPE.COM:443 HTTP/1.0\r\n"
@@ -728,7 +734,7 @@ const struct message requests[] =
   }
 
 #if !HTTP_PARSER_STRICT
-#define UTF8_PATH_REQ 26
+#define UTF8_PATH_REQ 27
 , {.name= "utf-8 path request"
   ,.type= HTTP_REQUEST
   ,.raw= "GET /δ¶/δt/pope?q=1#narf HTTP/1.1\r\n"
@@ -749,7 +755,7 @@ const struct message requests[] =
   ,.body= ""
   }
 
-#define HOSTNAME_UNDERSCORE 27
+#define HOSTNAME_UNDERSCORE 28
 , {.name = "hostname underscore"
   ,.type= HTTP_REQUEST
   ,.raw= "CONNECT home_0.netscape.com:443 HTTP/1.0\r\n"
@@ -775,7 +781,7 @@ const struct message requests[] =
 #endif  /* !HTTP_PARSER_STRICT */
 
 /* see https://github.com/ry/http-parser/issues/47 */
-#define EAT_TRAILING_CRLF_NO_CONNECTION_CLOSE 28
+#define EAT_TRAILING_CRLF_NO_CONNECTION_CLOSE 29
 , {.name = "eat CRLF between requests, no \"Connection: close\" header"
   ,.raw= "POST / HTTP/1.1\r\n"
          "Host: www.example.com\r\n"
@@ -802,7 +808,7 @@ const struct message requests[] =
   }
 
 /* see https://github.com/ry/http-parser/issues/47 */
-#define EAT_TRAILING_CRLF_WITH_CONNECTION_CLOSE 29
+#define EAT_TRAILING_CRLF_WITH_CONNECTION_CLOSE 30
 , {.name = "eat CRLF between requests even if \"Connection: close\" is set"
   ,.raw= "POST / HTTP/1.1\r\n"
          "Host: www.example.com\r\n"
@@ -830,7 +836,7 @@ const struct message requests[] =
   ,.body= "q=42"
   }
 
-#define PURGE_REQ 30
+#define PURGE_REQ 31
 , {.name = "PURGE request"
   ,.type= HTTP_REQUEST
   ,.raw= "PURGE /file.txt HTTP/1.1\r\n"
@@ -849,6 +855,48 @@ const struct message requests[] =
   ,.headers= { { "Host", "www.example.com" } }
   ,.body= ""
   }
+
+#define SEARCH_REQ 32
+, {.name = "SEARCH request"
+  ,.type= HTTP_REQUEST
+  ,.raw= "SEARCH / HTTP/1.1\r\n"
+         "Host: www.example.com\r\n"
+         "\r\n"
+  ,.should_keep_alive= TRUE
+  ,.message_complete_on_eof= FALSE
+  ,.http_major= 1
+  ,.http_minor= 1
+  ,.method= HTTP_SEARCH
+  ,.query_string= ""
+  ,.fragment= ""
+  ,.request_path= "/"
+  ,.request_url= "/"
+  ,.num_headers= 1
+  ,.headers= { { "Host", "www.example.com" } }
+  ,.body= ""
+  }
+
+#define PROXY_WITH_BASIC_AUTH 33
+, {.name= "host:port and basic_auth"
+  ,.type= HTTP_REQUEST
+  ,.raw= "GET http://a%12:b!&*$@hypnotoad.org:1234/toto HTTP/1.1\r\n"
+         "\r\n"
+  ,.should_keep_alive= TRUE
+  ,.message_complete_on_eof= FALSE
+  ,.http_major= 1
+  ,.http_minor= 1
+  ,.method= HTTP_GET
+  ,.fragment= ""
+  ,.request_path= "/toto"
+  ,.request_url= "http://a%12:b!&*$@hypnotoad.org:1234/toto"
+  ,.host= "hypnotoad.org"
+  ,.userinfo= "a%12:b!&*$"
+  ,.port= 1234
+  ,.num_headers= 0
+  ,.headers= { }
+  ,.body= ""
+  }
+
 
 , {.name= NULL } /* sentinel */
 };
@@ -1365,11 +1413,88 @@ const struct message responses[] =
 , {.name= NULL } /* sentinel */
 };
 
+/* strnlen() is a POSIX.2008 addition. Can't rely on it being available so
+ * define it ourselves.
+ */
+size_t
+strnlen(const char *s, size_t maxlen)
+{
+  const char *p;
+
+  p = memchr(s, '\0', maxlen);
+  if (p == NULL)
+    return maxlen;
+
+  return p - s;
+}
+
+size_t
+strlncat(char *dst, size_t len, const char *src, size_t n)
+{
+  size_t slen;
+  size_t dlen;
+  size_t rlen;
+  size_t ncpy;
+
+  slen = strnlen(src, n);
+  dlen = strnlen(dst, len);
+
+  if (dlen < len) {
+    rlen = len - dlen;
+    ncpy = slen < rlen ? slen : (rlen - 1);
+    memcpy(dst + dlen, src, ncpy);
+    dst[dlen + ncpy] = '\0';
+  }
+
+  assert(len > slen + dlen);
+  return slen + dlen;
+}
+
+size_t
+strlcat(char *dst, const char *src, size_t len)
+{
+  return strlncat(dst, len, src, (size_t) -1);
+}
+
+size_t
+strlncpy(char *dst, size_t len, const char *src, size_t n)
+{
+  size_t slen;
+  size_t ncpy;
+
+  slen = strnlen(src, n);
+
+  if (len > 0) {
+    ncpy = slen < len ? slen : (len - 1);
+    memcpy(dst, src, ncpy);
+    dst[ncpy] = '\0';
+  }
+
+  assert(len > slen);
+  return slen;
+}
+
+size_t
+strlcpy(char *dst, const char *src, size_t len)
+{
+  return strlncpy(dst, len, src, (size_t) -1);
+}
+
 int
 request_url_cb (http_parser *p, const char *buf, size_t len)
 {
   assert(p == parser);
-  strncat(messages[num_messages].request_url, buf, len);
+  strlncat(messages[num_messages].request_url,
+           sizeof(messages[num_messages].request_url),
+           buf,
+           len);
+  return 0;
+}
+
+int
+status_complete_cb (http_parser *p) {
+  assert(p == parser);
+  p->data++;
   return 0;
 }
 
@@ -1382,7 +1507,10 @@ header_field_cb (http_parser *p, const char *buf, size_t len)
   if (m->last_header_element != FIELD)
     m->num_headers++;
 
-  strncat(m->headers[m->num_headers-1][0], buf, len);
+  strlncat(m->headers[m->num_headers-1][0],
+           sizeof(m->headers[m->num_headers-1][0]),
+           buf,
+           len);
 
   m->last_header_element = FIELD;
 
@@ -1395,19 +1523,39 @@ header_value_cb (http_parser *p, const char *buf, size_t len)
   assert(p == parser);
   struct message *m = &messages[num_messages];
 
-  strncat(m->headers[m->num_headers-1][1], buf, len);
+  strlncat(m->headers[m->num_headers-1][1],
+           sizeof(m->headers[m->num_headers-1][1]),
+           buf,
+           len);
 
   m->last_header_element = VALUE;
 
   return 0;
 }
 
+void
+check_body_is_final (const http_parser *p)
+{
+  if (messages[num_messages].body_is_final) {
+    fprintf(stderr, "\n\n *** Error http_body_is_final() should return 1 "
+                    "on last on_body callback call "
+                    "but it doesn't! ***\n\n");
+    assert(0);
+    abort();
+  }
+  messages[num_messages].body_is_final = http_body_is_final(p);
+}
+
 int
 body_cb (http_parser *p, const char *buf, size_t len)
 {
   assert(p == parser);
-  strncat(messages[num_messages].body, buf, len);
+  strlncat(messages[num_messages].body,
+           sizeof(messages[num_messages].body),
+           buf,
+           len);
   messages[num_messages].body_size += len;
+  check_body_is_final(p);
  // printf("body_cb: '%s'\n", requests[num_messages].body);
   return 0;
 }
@@ -1418,6 +1566,7 @@ count_body_cb (http_parser *p, const char *buf, size_t len)
   assert(p == parser);
   assert(buf);
   messages[num_messages].body_size += len;
+  check_body_is_final(p);
   return 0;
 }
 
@@ -1454,6 +1603,18 @@ message_complete_cb (http_parser *p)
     assert(0);
     abort();
   }
+
+  if (messages[num_messages].body_size &&
+      http_body_is_final(p) &&
+      !messages[num_messages].body_is_final)
+  {
+    fprintf(stderr, "\n\n *** Error http_body_is_final() should return 1 "
+                    "on last on_body callback call "
+                    "but it doesn't! ***\n\n");
+    assert(0);
+    abort();
+  }
+
   messages[num_messages].message_complete_cb_called = TRUE;
 
   messages[num_messages].message_complete_on_eof = currently_parsing_eof;
@@ -1774,6 +1935,14 @@ message_eq (int index, const struct message *expected)
       abort();
     }
 
+    if (expected->host) {
+      MESSAGE_CHECK_URL_EQ(&u, expected, m, host, UF_HOST);
+    }
+
+    if (expected->userinfo) {
+      MESSAGE_CHECK_URL_EQ(&u, expected, m, userinfo, UF_USERINFO);
+    }
+
     m->port = (u.field_set & (1 << UF_PORT)) ?
       u.port : 0;
 
@@ -1836,7 +2005,7 @@ upgrade_message_fix(char *body, const size_t nread, const size_t nmsgs, ...) {
   va_list ap;
   size_t i;
   size_t off = 0;
- 
+
   va_start(ap, nmsgs);
 
   for (i = 0; i < nmsgs; i++) {
@@ -1871,8 +2040,7 @@ upgrade_message_fix(char *body, const size_t nread, const size_t nmsgs, ...) {
 static void
 print_error (const char *raw, size_t error_location)
 {
-  fprintf(stderr, "\n*** %s:%d -- %s ***\n\n",
-          "http_parser.c", HTTP_PARSER_ERRNO_LINE(parser),
+  fprintf(stderr, "\n*** %s ***\n\n",
           http_errno_description(HTTP_PARSER_ERRNO(parser)));
 
   int this_line = 0, char_len = 0;
@@ -1946,6 +2114,26 @@ const struct url_test url_tests[] =
       ,{ 15,  1 } /* UF_PATH */
       ,{  0,  0 } /* UF_QUERY */
       ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
+      }
+    }
+  ,.rv=0
+  }
+
+, {.name="proxy request with port"
+  ,.url="http://hostname:444/"
+  ,.is_connect=0
+  ,.u=
+    {.field_set=(1 << UF_SCHEMA) | (1 << UF_HOST) | (1 << UF_PORT) | (1 << UF_PATH)
+    ,.port=444
+    ,.field_data=
+      {{  0,  4 } /* UF_SCHEMA */
+      ,{  7,  8 } /* UF_HOST */
+      ,{ 16,  3 } /* UF_PORT */
+      ,{ 19,  1 } /* UF_PATH */
+      ,{  0,  0 } /* UF_QUERY */
+      ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
       }
     }
   ,.rv=0
@@ -1964,9 +2152,16 @@ const struct url_test url_tests[] =
       ,{  0,  0 } /* UF_PATH */
       ,{  0,  0 } /* UF_QUERY */
       ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
       }
     }
   ,.rv=0
+  }
+
+, {.name="CONNECT request but not connect"
+  ,.url="hostname:443"
+  ,.is_connect=0
+  ,.rv=1
   }
 
 , {.name="proxy ipv6 request"
@@ -1982,6 +2177,26 @@ const struct url_test url_tests[] =
       ,{ 17,  1 } /* UF_PATH */
       ,{  0,  0 } /* UF_QUERY */
       ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
+      }
+    }
+  ,.rv=0
+  }
+
+, {.name="proxy ipv6 request with port"
+  ,.url="http://[1:2::3:4]:67/"
+  ,.is_connect=0
+  ,.u=
+    {.field_set=(1 << UF_SCHEMA) | (1 << UF_HOST) | (1 << UF_PORT) | (1 << UF_PATH)
+    ,.port=67
+    ,.field_data=
+      {{  0,  4 } /* UF_SCHEMA */
+      ,{  8,  8 } /* UF_HOST */
+      ,{ 18,  2 } /* UF_PORT */
+      ,{ 20,  1 } /* UF_PATH */
+      ,{  0,  0 } /* UF_QUERY */
+      ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
       }
     }
   ,.rv=0
@@ -2000,13 +2215,35 @@ const struct url_test url_tests[] =
       ,{  0,  0 } /* UF_PATH */
       ,{  0,  0 } /* UF_QUERY */
       ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
+      }
+    }
+  ,.rv=0
+  }
+
+, {.name="ipv4 in ipv6 address"
+  ,.url="http://[2001:0000:0000:0000:0000:0000:1.9.1.1]/"
+  ,.is_connect=0
+  ,.u=
+    {.field_set=(1 << UF_SCHEMA) | (1 << UF_HOST) | (1 << UF_PATH)
+    ,.port=0
+    ,.field_data=
+      {{  0,  4 } /* UF_SCHEMA */
+      ,{  8, 37 } /* UF_HOST */
+      ,{  0,  0 } /* UF_PORT */
+      ,{ 46,  1 } /* UF_PATH */
+      ,{  0,  0 } /* UF_QUERY */
+      ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
       }
     }
   ,.rv=0
   }
 
 , {.name="extra ? in query string"
-  ,.url="http://a.tbcdn.cn/p/fp/2010c/??fp-header-min.css,fp-base-min.css,fp-channel-min.css,fp-product-min.css,fp-mall-min.css,fp-category-min.css,fp-sub-min.css,fp-gdp4p-min.css,fp-css3-min.css,fp-misc-min.css?t=20101022.css"
+  ,.url="http://a.tbcdn.cn/p/fp/2010c/??fp-header-min.css,fp-base-min.css,"
+  "fp-channel-min.css,fp-product-min.css,fp-mall-min.css,fp-category-min.css,"
+  "fp-sub-min.css,fp-gdp4p-min.css,fp-css3-min.css,fp-misc-min.css?t=20101022.css"
   ,.is_connect=0
   ,.u=
     {.field_set=(1<<UF_SCHEMA) | (1<<UF_HOST) | (1<<UF_PATH) | (1<<UF_QUERY)
@@ -2018,9 +2255,116 @@ const struct url_test url_tests[] =
       ,{ 17, 12 } /* UF_PATH */
       ,{ 30,187 } /* UF_QUERY */
       ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
       }
     }
   ,.rv=0
+  }
+
+, {.name="space URL encoded"
+  ,.url="/toto.html?toto=a%20b"
+  ,.is_connect=0
+  ,.u=
+    {.field_set= (1<<UF_PATH) | (1<<UF_QUERY)
+    ,.port=0
+    ,.field_data=
+      {{  0,  0 } /* UF_SCHEMA */
+      ,{  0,  0 } /* UF_HOST */
+      ,{  0,  0 } /* UF_PORT */
+      ,{  0, 10 } /* UF_PATH */
+      ,{ 11, 10 } /* UF_QUERY */
+      ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
+      }
+    }
+  ,.rv=0
+  }
+
+
+, {.name="URL fragment"
+  ,.url="/toto.html#titi"
+  ,.is_connect=0
+  ,.u=
+    {.field_set= (1<<UF_PATH) | (1<<UF_FRAGMENT)
+    ,.port=0
+    ,.field_data=
+      {{  0,  0 } /* UF_SCHEMA */
+      ,{  0,  0 } /* UF_HOST */
+      ,{  0,  0 } /* UF_PORT */
+      ,{  0, 10 } /* UF_PATH */
+      ,{  0,  0 } /* UF_QUERY */
+      ,{ 11,  4 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
+      }
+    }
+  ,.rv=0
+  }
+
+, {.name="complex URL fragment"
+  ,.url="http://www.webmasterworld.com/r.cgi?f=21&d=8405&url="
+    "http://www.example.com/index.html?foo=bar&hello=world#midpage"
+  ,.is_connect=0
+  ,.u=
+    {.field_set= (1<<UF_SCHEMA) | (1<<UF_HOST) | (1<<UF_PATH) | (1<<UF_QUERY) |\
+      (1<<UF_FRAGMENT)
+    ,.port=0
+    ,.field_data=
+      {{  0,  4 } /* UF_SCHEMA */
+      ,{  7, 22 } /* UF_HOST */
+      ,{  0,  0 } /* UF_PORT */
+      ,{ 29,  6 } /* UF_PATH */
+      ,{ 36, 69 } /* UF_QUERY */
+      ,{106,  7 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
+      }
+    }
+  ,.rv=0
+  }
+
+, {.name="complex URL from node js url parser doc"
+  ,.url="http://host.com:8080/p/a/t/h?query=string#hash"
+  ,.is_connect=0
+  ,.u=
+    {.field_set= (1<<UF_SCHEMA) | (1<<UF_HOST) | (1<<UF_PORT) | (1<<UF_PATH) |\
+      (1<<UF_QUERY) | (1<<UF_FRAGMENT)
+    ,.port=8080
+    ,.field_data=
+      {{  0,  4 } /* UF_SCHEMA */
+      ,{  7,  8 } /* UF_HOST */
+      ,{ 16,  4 } /* UF_PORT */
+      ,{ 20,  8 } /* UF_PATH */
+      ,{ 29, 12 } /* UF_QUERY */
+      ,{ 42,  4 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
+      }
+    }
+  ,.rv=0
+  }
+
+, {.name="complex URL with basic auth from node js url parser doc"
+  ,.url="http://a:b@host.com:8080/p/a/t/h?query=string#hash"
+  ,.is_connect=0
+  ,.u=
+    {.field_set= (1<<UF_SCHEMA) | (1<<UF_HOST) | (1<<UF_PORT) | (1<<UF_PATH) |\
+      (1<<UF_QUERY) | (1<<UF_FRAGMENT) | (1<<UF_USERINFO)
+    ,.port=8080
+    ,.field_data=
+      {{  0,  4 } /* UF_SCHEMA */
+      ,{ 11,  8 } /* UF_HOST */
+      ,{ 20,  4 } /* UF_PORT */
+      ,{ 24,  8 } /* UF_PATH */
+      ,{ 33, 12 } /* UF_QUERY */
+      ,{ 46,  4 } /* UF_FRAGMENT */
+      ,{  7,  3 } /* UF_USERINFO */
+      }
+    }
+  ,.rv=0
+  }
+
+, {.name="double @"
+  ,.url="http://a:b@@hostname:443/"
+  ,.is_connect=0
+  ,.rv=1
   }
 
 , {.name="proxy empty host"
@@ -2032,6 +2376,12 @@ const struct url_test url_tests[] =
 , {.name="proxy empty port"
   ,.url="http://hostname:/"
   ,.is_connect=0
+  ,.rv=1
+  }
+
+, {.name="CONNECT with basic auth"
+  ,.url="a:b@hostname:443"
+  ,.is_connect=1
   ,.rv=1
   }
 
@@ -2052,12 +2402,189 @@ const struct url_test url_tests[] =
   ,.is_connect=1
   ,.rv=1
   }
+
+, {.name="space in URL"
+  ,.url="/foo bar/"
+  ,.rv=1 /* s_dead */
+  }
+
+, {.name="proxy basic auth with space url encoded"
+  ,.url="http://a%20:b@host.com/"
+  ,.is_connect=0
+  ,.u=
+    {.field_set= (1<<UF_SCHEMA) | (1<<UF_HOST) | (1<<UF_PATH) | (1<<UF_USERINFO)
+    ,.port=0
+    ,.field_data=
+      {{  0,  4 } /* UF_SCHEMA */
+      ,{ 14,  8 } /* UF_HOST */
+      ,{  0,  0 } /* UF_PORT */
+      ,{ 22,  1 } /* UF_PATH */
+      ,{  0,  0 } /* UF_QUERY */
+      ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  7,  6 } /* UF_USERINFO */
+      }
+    }
+  ,.rv=0
+  }
+
+, {.name="carriage return in URL"
+  ,.url="/foo\rbar/"
+  ,.rv=1 /* s_dead */
+  }
+
+, {.name="proxy double : in URL"
+  ,.url="http://hostname::443/"
+  ,.rv=1 /* s_dead */
+  }
+
+, {.name="proxy basic auth with double :"
+  ,.url="http://a::b@host.com/"
+  ,.is_connect=0
+  ,.u=
+    {.field_set= (1<<UF_SCHEMA) | (1<<UF_HOST) | (1<<UF_PATH) | (1<<UF_USERINFO)
+    ,.port=0
+    ,.field_data=
+      {{  0,  4 } /* UF_SCHEMA */
+      ,{ 12,  8 } /* UF_HOST */
+      ,{  0,  0 } /* UF_PORT */
+      ,{ 20,  1 } /* UF_PATH */
+      ,{  0,  0 } /* UF_QUERY */
+      ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  7,  4 } /* UF_USERINFO */
+      }
+    }
+  ,.rv=0
+  }
+
+, {.name="line feed in URL"
+  ,.url="/foo\nbar/"
+  ,.rv=1 /* s_dead */
+  }
+
+, {.name="proxy empty basic auth"
+  ,.url="http://@hostname/fo"
+  ,.u=
+    {.field_set= (1<<UF_SCHEMA) | (1<<UF_HOST) | (1<<UF_PATH)
+    ,.port=0
+    ,.field_data=
+      {{  0,  4 } /* UF_SCHEMA */
+      ,{  8,  8 } /* UF_HOST */
+      ,{  0,  0 } /* UF_PORT */
+      ,{ 16,  3 } /* UF_PATH */
+      ,{  0,  0 } /* UF_QUERY */
+      ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
+      }
+    }
+  ,.rv=0
+  }
+, {.name="proxy line feed in hostname"
+  ,.url="http://host\name/fo"
+  ,.rv=1 /* s_dead */
+  }
+
+, {.name="proxy % in hostname"
+  ,.url="http://host%name/fo"
+  ,.rv=1 /* s_dead */
+  }
+
+, {.name="proxy ; in hostname"
+  ,.url="http://host;ame/fo"
+  ,.rv=1 /* s_dead */
+  }
+
+, {.name="proxy basic auth with unreservedchars"
+  ,.url="http://a!;-_!=+$@host.com/"
+  ,.is_connect=0
+  ,.u=
+    {.field_set= (1<<UF_SCHEMA) | (1<<UF_HOST) | (1<<UF_PATH) | (1<<UF_USERINFO)
+    ,.port=0
+    ,.field_data=
+      {{  0,  4 } /* UF_SCHEMA */
+      ,{ 17,  8 } /* UF_HOST */
+      ,{  0,  0 } /* UF_PORT */
+      ,{ 25,  1 } /* UF_PATH */
+      ,{  0,  0 } /* UF_QUERY */
+      ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  7,  9 } /* UF_USERINFO */
+      }
+    }
+  ,.rv=0
+  }
+
+, {.name="proxy only empty basic auth"
+  ,.url="http://@/fo"
+  ,.rv=1 /* s_dead */
+  }
+
+, {.name="proxy only basic auth"
+  ,.url="http://toto@/fo"
+  ,.rv=1 /* s_dead */
+  }
+
+, {.name="proxy emtpy hostname"
+  ,.url="http:///fo"
+  ,.rv=1 /* s_dead */
+  }
+
+, {.name="proxy = in URL"
+  ,.url="http://host=ame/fo"
+  ,.rv=1 /* s_dead */
+  }
+
+#if HTTP_PARSER_STRICT
+
+, {.name="tab in URL"
+  ,.url="/foo\tbar/"
+  ,.rv=1 /* s_dead */
+  }
+
+, {.name="form feed in URL"
+  ,.url="/foo\fbar/"
+  ,.rv=1 /* s_dead */
+  }
+
+#else /* !HTTP_PARSER_STRICT */
+
+, {.name="tab in URL"
+  ,.url="/foo\tbar/"
+  ,.u=
+    {.field_set=(1 << UF_PATH)
+    ,.field_data=
+      {{  0,  0 } /* UF_SCHEMA */
+      ,{  0,  0 } /* UF_HOST */
+      ,{  0,  0 } /* UF_PORT */
+      ,{  0,  9 } /* UF_PATH */
+      ,{  0,  0 } /* UF_QUERY */
+      ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
+      }
+    }
+  ,.rv=0
+  }
+
+, {.name="form feed in URL"
+  ,.url="/foo\fbar/"
+  ,.u=
+    {.field_set=(1 << UF_PATH)
+    ,.field_data=
+      {{  0,  0 } /* UF_SCHEMA */
+      ,{  0,  0 } /* UF_HOST */
+      ,{  0,  0 } /* UF_PORT */
+      ,{  0,  9 } /* UF_PATH */
+      ,{  0,  0 } /* UF_QUERY */
+      ,{  0,  0 } /* UF_FRAGMENT */
+      ,{  0,  0 } /* UF_USERINFO */
+      }
+    }
+  ,.rv=0
+  }
+#endif
 };
 
 void
 dump_url (const char *url, const struct http_parser_url *u)
 {
-  char part[512];
   unsigned int i;
 
   printf("\tfield_set: 0x%x, port: %u\n", u->field_set, u->port);
@@ -2067,14 +2594,12 @@ dump_url (const char *url, const struct http_parser_url *u)
       continue;
     }
 
-    memcpy(part, url + u->field_data[i].off, u->field_data[i].len);
-    part[u->field_data[i].len] = '\0';
-
-    printf("\tfield_data[%u]: off: %u len: %u part: \"%s\"\n",
+    printf("\tfield_data[%u]: off: %u len: %u part: \"%.*s\n\"",
            i,
            u->field_data[i].off,
            u->field_data[i].len,
-           part);
+           u->field_data[i].len,
+           url + u->field_data[i].off);
   }
 }
 
@@ -2122,6 +2647,13 @@ test_parse_url (void)
       }
     }
   }
+}
+
+void
+test_method_str (void)
+{
+  assert(0 == strcmp("GET", http_method_str(HTTP_GET)));
+  assert(0 == strcmp("<unknown>", http_method_str(1337)));
 }
 
 void
@@ -2334,8 +2866,8 @@ test_no_overflow_long_body (int req, size_t length)
   size_t parsed;
   size_t i;
   char buf1[3000];
-  size_t buf1len = sprintf(buf1, "%s\r\nConnection: Keep-Alive\r\nContent-Length: %zu\r\n\r\n",
-      req ? "POST / HTTP/1.0" : "HTTP/1.0 200 OK", length);
+  size_t buf1len = sprintf(buf1, "%s\r\nConnection: Keep-Alive\r\nContent-Length: %lu\r\n\r\n",
+      req ? "POST / HTTP/1.0" : "HTTP/1.0 200 OK", (unsigned long)length);
   parsed = http_parser_execute(&parser, &settings_null, buf1, buf1len);
   if (parsed != buf1len)
     goto err;
@@ -2353,9 +2885,9 @@ test_no_overflow_long_body (int req, size_t length)
 
  err:
   fprintf(stderr,
-          "\n*** error in test_no_overflow_long_body %s of length %zu ***\n",
+          "\n*** error in test_no_overflow_long_body %s of length %lu ***\n",
           req ? "REQUEST" : "RESPONSE",
-          length);
+          (unsigned long)length);
   abort();
 }
 
@@ -2452,15 +2984,15 @@ test_scan (const struct message *r1, const struct message *r2, const struct mess
         parser_init(type_both ? HTTP_BOTH : r1->type);
 
         buf1_len = i;
-        strncpy(buf1, total, buf1_len);
+        strlncpy(buf1, sizeof(buf1), total, buf1_len);
         buf1[buf1_len] = 0;
 
         buf2_len = j - i;
-        strncpy(buf2, total+i, buf2_len);
+        strlncpy(buf2, sizeof(buf1), total+i, buf2_len);
         buf2[buf2_len] = 0;
 
         buf3_len = total_len - j;
-        strncpy(buf3, total+j, buf3_len);
+        strlncpy(buf3, sizeof(buf1), total+j, buf3_len);
         buf3[buf3_len] = 0;
 
         read = parse(buf1, buf1_len);
@@ -2564,119 +3096,18 @@ create_large_chunked_message (int body_size_in_kb, const char* headers)
   return buf;
 }
 
-char *
-quote(const char * orig) {
-  if (!orig) return NULL;
-  size_t j, i, len = strlen(orig);
-  char * quoted = malloc(len == 0 ? 1 : len*2); // hm..
-  bzero(quoted, len == 0 ? 1 : len*2);
-  for (i=0, j=0; i!=len; ++i) {
-    switch (orig[i]){
-      case '\n':
-        quoted[j++] = '\\';
-        quoted[j++] = 'n';
-        break;
-      case '\r':
-        quoted[j++] = '\\';
-        quoted[j++] = 'r';
-        break;
-      case '"':
-        quoted[j++] = '\\';
-        quoted[j++] = '"';
-        break;
-      default  :
-        quoted[j++] = orig[i];
-    }
-  }
-  return quoted;
-}
-
 void
-dump_message(const struct message * m)
+test_status_complete (void)
 {
-  int i;
-  printf("name  :%s\n", m->name);
-  char * bla = quote(m->raw);
-  printf("raw   :\"%s\"\n", bla);
-  free(bla);
-  switch (m->type){
-    case HTTP_REQUEST:
-      printf("type  :HTTP_REQUEST\n");break;
-    case HTTP_RESPONSE:
-      printf("type  :HTTP_RESPONSE\n"); break;
-    case HTTP_BOTH:
-      printf("type  :HTTP_BOTH\n");
-  }
-  switch (m->method) {
-    case HTTP_DELETE:      printf("method: HTTP_DELETE\n");break;
-    case HTTP_GET:         printf("method: HTTP_GET\n");break;
-    case HTTP_HEAD:        printf("method: HTTP_HEAD\n");break;
-    case HTTP_POST:        printf("method: HTTP_POST\n");break;
-    case HTTP_PUT:         printf("method: HTTP_PUT\n");break;
-    case HTTP_CONNECT:     printf("method: HTTP_CONNECT\n");break;
-    case HTTP_OPTIONS:     printf("method: HTTP_OPTIONS\n");break;
-    case HTTP_TRACE:       printf("method: HTTP_TRACE\n");break;
-    case HTTP_COPY:        printf("method: HTTP_COPY\n");break;
-    case HTTP_LOCK:        printf("method: HTTP_LOCK\n");break;
-    case HTTP_MKCOL:       printf("method: HTTP_MKCOL\n");break;
-    case HTTP_MOVE:        printf("method: HTTP_MOVE\n");break;
-    case HTTP_PROPFIND:    printf("method: HTTP_PROPFIND\n");break;
-    case HTTP_PROPPATCH:   printf("method: HTTP_PROPPATCH\n");break;
-    case HTTP_UNLOCK:      printf("method: HTTP_UNLOCK\n");break;
-    /* subversion */
-    case HTTP_REPORT:      printf("method: HTTP_REPORT\n"); break;
-    case HTTP_MKACTIVITY:  printf("method: HTTP_MKACTIVITY\n"); break;
-    case HTTP_CHECKOUT:    printf("method: HTTP_CHECKOUT\n"); break;
-    case HTTP_MERGE:       printf("method: HTTP_MERGE\n"); break;
+  parser_init(HTTP_RESPONSE);
+  parser->data = 0;
+  http_parser_settings settings = settings_null;
+  settings.on_status_complete = status_complete_cb;
 
-    case HTTP_MSEARCH:     printf("method: HTTP_MSEARCH\n"); break;
-    case HTTP_NOTIFY:      printf("method: HTTP_NOTIFY\n"); break;
-    case HTTP_SUBSCRIBE:   printf("method: HTTP_SUBSCRIBE\n"); break;
-    case HTTP_UNSUBSCRIBE: printf("method: HTTP_UNSUBSCRIBE\n"); break;
-    default:
-      printf("method: UNKNOWN\n"); break;
-      break;
-  }
-  printf("status_code :%d\n", m->status_code);
-  printf("request_path:%s\n", m->request_path);
-  printf("request_url :%s\n", m->request_url);
-  printf("fragment    :%s\n", m->fragment);
-  printf("query_string:%s\n", m->query_string);
-
-  bla = quote(m->body);
-  printf("body        :\"%s\"\n", bla);
-  free(bla);
-  printf("body_size   :%zu\n", m->body_size);
-
-  for (i=0; i!=m->num_headers; ++i){
-    printf("header_%d :{ \"%s\": \"%s\"}\n", i, m->headers[i][0], m->headers[i][1]);
-  }
-
-  printf("should_keep_alive         :%d\n", m->should_keep_alive);
-  bla = quote(m->upgrade);
-  if (bla) {
-    printf("upgrade                   :\"%s\"\n", bla);
-  }
-  free(bla);
-  printf("http_major                :%d\n", m->http_major);
-  printf("http_minor                :%d\n", m->http_minor);
-//  printf("message_begin_cb_called   :%d\n", m->message_begin_cb_called);
-//  printf("headers_complete_cb_called:%d\n", m->headers_complete_cb_called);
-//  printf("message_complete_cb_called:%d\n", m->message_complete_cb_called);
-//  printf("message_complete_on_eof   :%d\n", m->message_complete_on_eof);
-  printf("\n");
-}
-
-void
-dump_messages(void)
-{
-  int request_count;
-  for (request_count = 0; requests[request_count].name; request_count++){
-    dump_message(&requests[request_count]);
-  }
-  for (request_count = 0; responses[request_count].name; request_count++){
-    dump_message(&responses[request_count]);
-  }
+  char *response = "don't mind me, just a simple response";
+  http_parser_execute(parser, &settings, response, strlen(response));
+  assert(parser->data == (void*)0); // the status_complete callback was never called
+  assert(parser->http_errno == HPE_INVALID_CONSTANT); // the errno for an invalid status line
 }
 
 /* Verify that we can pause parsing at any of the bytes in the
@@ -2730,23 +3161,15 @@ test:
   if(!message_eq(0, msg)) abort();
 
   parser_free();
-
 }
 
 int
-main (int argc, char * argv[])
+main (void)
 {
   parser = NULL;
   int i, j, k;
   int request_count;
   int response_count;
-  
-  if (1 != argc) {
-    if (0 == (strncmp("-dump", argv[1], sizeof("-dump")))) {
-      dump_messages();
-      exit(0);
-    }
-  }
 
   printf("sizeof(http_parser) = %u\n", (unsigned int)sizeof(http_parser));
 
@@ -2756,6 +3179,7 @@ main (int argc, char * argv[])
   //// API
   test_preserve_data();
   test_parse_url();
+  test_method_str();
 
   //// OVERFLOW CONDITIONS
 
@@ -2992,6 +3416,8 @@ main (int argc, char * argv[])
            , &requests[PREFIX_NEWLINE_GET ]
            , &requests[CONNECT_REQUEST]
            );
+
+  test_status_complete();
 
   puts("requests okay");
 
